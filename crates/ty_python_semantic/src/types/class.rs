@@ -1148,7 +1148,7 @@ impl<'db> ClassType<'db> {
         db: &'db dyn Db,
         other: Self,
         inferable: InferableTypeVars<'_, 'db>,
-        relation: TypeRelation<'db>,
+        relation: TypeRelation,
         relation_visitor: &HasRelationToVisitor<'db>,
         disjointness_visitor: &IsDisjointVisitor<'db>,
     ) -> ConstraintSet<'db> {
@@ -1157,9 +1157,7 @@ impl<'db> ClassType<'db> {
                 ClassBase::Dynamic(_) => match relation {
                     TypeRelation::Subtyping
                     | TypeRelation::Redundancy
-                    | TypeRelation::SubtypingAssuming(_) => {
-                        ConstraintSet::from(other.is_object(db))
-                    }
+                    | TypeRelation::SubtypingAssuming => ConstraintSet::from(other.is_object(db)),
                     TypeRelation::Assignability | TypeRelation::ConstraintSetAssignability => {
                         ConstraintSet::from(!other.is_final(db))
                     }
