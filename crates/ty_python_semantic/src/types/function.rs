@@ -1207,7 +1207,7 @@ impl<'db> FunctionType<'db> {
         disjointness_visitor: &IsDisjointVisitor<'db>,
     ) -> ConstraintSet<'db> {
         if self.literal(db) != other.literal(db) {
-            return ConstraintSet::from(false);
+            return ConstraintSet::from_bool(constraints, false);
         }
 
         let self_signature = self.signature(db);
@@ -1232,10 +1232,10 @@ impl<'db> FunctionType<'db> {
         visitor: &IsEquivalentVisitor<'db>,
     ) -> ConstraintSet<'db> {
         if self.normalized(db) == other.normalized(db) {
-            return ConstraintSet::from(true);
+            return ConstraintSet::from_bool(constraints, true);
         }
         if self.literal(db) != other.literal(db) {
-            return ConstraintSet::from(false);
+            return ConstraintSet::from_bool(constraints, false);
         }
         let self_signature = self.signature(db);
         let other_signature = other.signature(db);

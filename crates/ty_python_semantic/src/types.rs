@@ -548,14 +548,15 @@ impl<'db> PropertyInstanceType<'db> {
         self,
         db: &'db dyn Db,
         other: Self,
+        constraints: &ConstraintSetBuilder<'db>,
         inferable: InferableTypeVars<'_, 'db>,
     ) -> ConstraintSet<'db> {
         self.is_equivalent_to_impl(
             db,
             other,
-            &ConstraintSetBuilder::new(),
+            constraints,
             inferable,
-            &IsEquivalentVisitor::default(),
+            &IsEquivalentVisitor::default(constraints),
         )
     }
 
@@ -569,27 +570,27 @@ impl<'db> PropertyInstanceType<'db> {
     ) -> ConstraintSet<'db> {
         let getter_equivalence = if let Some(getter) = self.getter(db) {
             let Some(other_getter) = other.getter(db) else {
-                return ConstraintSet::from(false);
+                return ConstraintSet::from_bool(constraints, false);
             };
             getter.is_equivalent_to_impl(db, other_getter, constraints, inferable, visitor)
         } else {
             if other.getter(db).is_some() {
-                return ConstraintSet::from(false);
+                return ConstraintSet::from_bool(constraints, false);
             }
-            ConstraintSet::from(true)
+            ConstraintSet::from_bool(constraints, true)
         };
 
         let setter_equivalence = || {
             if let Some(setter) = self.setter(db) {
                 let Some(other_setter) = other.setter(db) else {
-                    return ConstraintSet::from(false);
+                    return ConstraintSet::from_bool(constraints, false);
                 };
                 setter.is_equivalent_to_impl(db, other_setter, constraints, inferable, visitor)
             } else {
                 if other.setter(db).is_some() {
-                    return ConstraintSet::from(false);
+                    return ConstraintSet::from_bool(constraints, false);
                 }
-                ConstraintSet::from(true)
+                ConstraintSet::from_bool(constraints, true)
             }
         };
 
@@ -1670,9 +1671,10 @@ impl<'db> Type<'db> {
         target: Type<'db>,
         inferable: InferableTypeVars<'_, 'db>,
     ) -> Type<'db> {
+        let constraints = ConstraintSetBuilder::new();
         self.filter_union(db, |elem| {
             !elem
-                .when_disjoint_from(db, target, inferable)
+                .when_disjoint_from(db, target, &constraints, inferable)
                 .is_always_satisfied(db)
         })
     }
@@ -2143,11 +2145,13 @@ impl<'db> Type<'db> {
     where
         F: FnMut(BoundTypeVarInstance<'db>, Type<'db>, TypeVarVariance, TypeContext<'db>),
     {
+        let constraints = ConstraintSetBuilder::new();
         self.visit_specialization_impl(
             db,
             tcx,
             TypeVarVariance::Covariant,
             &mut f,
+            &constraints,
             &SpecializationVisitor::default(),
         );
     }
@@ -2158,24 +2162,44 @@ impl<'db> Type<'db> {
         tcx: TypeContext<'db>,
         polarity: TypeVarVariance,
         f: &mut dyn FnMut(BoundTypeVarInstance<'db>, Type<'db>, TypeVarVariance, TypeContext<'db>),
+        constraints: &ConstraintSetBuilder<'db>,
         visitor: &SpecializationVisitor<'db>,
     ) {
         let Type::NominalInstance(instance) = self else {
             match self {
                 Type::Union(union) => {
                     for element in union.elements(db) {
-                        element.visit_specialization_impl(db, tcx, polarity, f, visitor);
+                        element.visit_specialization_impl(
+                            db,
+                            tcx,
+                            polarity,
+                            f,
+                            constraints,
+                            visitor,
+                        );
                     }
                 }
                 Type::Intersection(intersection) => {
                     for element in intersection.positive(db) {
-                        element.visit_specialization_impl(db, tcx, polarity, f, visitor);
+                        element.visit_specialization_impl(
+                            db,
+                            tcx,
+                            polarity,
+                            f,
+                            constraints,
+                            visitor,
+                        );
                     }
                 }
                 Type::TypeAlias(alias) => visitor.visit(self, || {
-                    alias
-                        .value_type(db)
-                        .visit_specialization_impl(db, tcx, polarity, f, visitor);
+                    alias.value_type(db).visit_specialization_impl(
+                        db,
+                        tcx,
+                        polarity,
+                        f,
+                        constraints,
+                        visitor,
+                    );
                 }),
                 _ => {}
             }
@@ -2197,7 +2221,7 @@ impl<'db> Type<'db> {
 
             if let Some(tcx) = tcx.annotation {
                 let alias_instance = Type::instance(db, class_literal.identity_specialization(db));
-                let _ = builder.infer_reverse(tcx, alias_instance);
+                let _ = builder.infer_reverse(constraints, tcx, alias_instance);
             }
 
             builder.into_type_mappings()
@@ -2210,7 +2234,7 @@ impl<'db> Type<'db> {
             f(type_var, *ty, variance, narrowed_tcx);
 
             visitor.visit(*ty, || {
-                ty.visit_specialization_impl(db, narrowed_tcx, variance, f, visitor);
+                ty.visit_specialization_impl(db, narrowed_tcx, variance, f, constraints, visitor);
             });
         }
     }
@@ -5000,9 +5024,16 @@ impl<'db> Type<'db> {
         db: &'db dyn Db,
         argument_types: &CallArguments<'_, 'db>,
     ) -> Result<Bindings<'db>, CallError<'db>> {
+        let constraints = ConstraintSetBuilder::new();
         self.bindings(db)
             .match_parameters(db, argument_types)
-            .check_types(db, argument_types, TypeContext::default(), &[])
+            .check_types(
+                db,
+                &constraints,
+                argument_types,
+                TypeContext::default(),
+                &[],
+            )
     }
 
     /// Look up a dunder method on the meta-type of `self` and call it.
@@ -5055,10 +5086,11 @@ impl<'db> Type<'db> {
                 definedness: boundness,
                 ..
             }) => {
+                let constraints = ConstraintSetBuilder::new();
                 let bindings = dunder_callable
                     .bindings(db)
                     .match_parameters(db, argument_types)
-                    .check_types(db, argument_types, tcx, &[])?;
+                    .check_types(db, &constraints, argument_types, tcx, &[])?;
 
                 if boundness == Definedness::PossiblyUndefined {
                     return Err(CallDunderError::PossiblyUnbound(Box::new(bindings)));
@@ -5089,10 +5121,11 @@ impl<'db> Type<'db> {
                 definedness: boundness,
                 ..
             }) => {
+                let constraints = ConstraintSetBuilder::new();
                 let bindings = dunder_callable
                     .bindings(db)
                     .match_parameters(db, argument_types)
-                    .check_types(db, argument_types, tcx, &[])?;
+                    .check_types(db, &constraints, argument_types, tcx, &[])?;
 
                 if boundness == Definedness::PossiblyUndefined {
                     return Err(CallDunderError::PossiblyUnbound(Box::new(bindings)));
@@ -10912,7 +10945,7 @@ impl<'db> CallableType<'db> {
         disjointness_visitor: &IsDisjointVisitor<'db>,
     ) -> ConstraintSet<'db> {
         if other.is_function_like(db) && !self.is_function_like(db) {
-            return ConstraintSet::from(false);
+            return ConstraintSet::from_bool(constraints, false);
         }
 
         self.signatures(db).has_relation_to_impl(
@@ -10938,10 +10971,14 @@ impl<'db> CallableType<'db> {
         visitor: &IsEquivalentVisitor<'db>,
     ) -> ConstraintSet<'db> {
         if self == other {
-            return ConstraintSet::from(true);
+            return ConstraintSet::from_bool(constraints, true);
         }
 
-        ConstraintSet::from(self.is_function_like(db) == other.is_function_like(db)).and(db, || {
+        ConstraintSet::from_bool(
+            constraints,
+            self.is_function_like(db) == other.is_function_like(db),
+        )
+        .and(db, || {
             self.signatures(db).is_equivalent_to_impl(
                 db,
                 other.signatures(db),
@@ -11138,10 +11175,10 @@ impl<'db> KnownBoundMethodType<'db> {
             | (
                 KnownBoundMethodType::PropertyDunderSet(self_property),
                 KnownBoundMethodType::PropertyDunderSet(other_property),
-            ) => self_property.when_equivalent_to(db, other_property, inferable),
+            ) => self_property.when_equivalent_to(db, other_property, constraints, inferable),
 
             (KnownBoundMethodType::StrStartswith(_), KnownBoundMethodType::StrStartswith(_)) => {
-                ConstraintSet::from(self == other)
+                ConstraintSet::from_bool(constraints, self == other)
             }
 
             (
@@ -11171,7 +11208,7 @@ impl<'db> KnownBoundMethodType<'db> {
             | (
                 KnownBoundMethodType::GenericContextSpecializeConstrained(_),
                 KnownBoundMethodType::GenericContextSpecializeConstrained(_),
-            ) => ConstraintSet::from(true),
+            ) => ConstraintSet::from_bool(constraints, true),
 
             (
                 KnownBoundMethodType::FunctionTypeDunderGet(_)
@@ -11198,7 +11235,7 @@ impl<'db> KnownBoundMethodType<'db> {
                 | KnownBoundMethodType::ConstraintSetSatisfies(_)
                 | KnownBoundMethodType::ConstraintSetSatisfiedByAllTypeVars(_)
                 | KnownBoundMethodType::GenericContextSpecializeConstrained(_),
-            ) => ConstraintSet::from(false),
+            ) => ConstraintSet::from_bool(constraints, false),
         }
     }
 
@@ -11249,7 +11286,7 @@ impl<'db> KnownBoundMethodType<'db> {
             ),
 
             (KnownBoundMethodType::StrStartswith(_), KnownBoundMethodType::StrStartswith(_)) => {
-                ConstraintSet::from(self == other)
+                ConstraintSet::from_bool(constraints, self == other)
             }
 
             (
@@ -11263,7 +11300,7 @@ impl<'db> KnownBoundMethodType<'db> {
             | (
                 KnownBoundMethodType::ConstraintSetNever,
                 KnownBoundMethodType::ConstraintSetNever,
-            ) => ConstraintSet::from(true),
+            ) => ConstraintSet::from_bool(constraints, true),
 
             (
                 KnownBoundMethodType::ConstraintSetImpliesSubtypeOf(left_constraints),
@@ -11283,7 +11320,9 @@ impl<'db> KnownBoundMethodType<'db> {
             (
                 KnownBoundMethodType::GenericContextSpecializeConstrained(left_generic_context),
                 KnownBoundMethodType::GenericContextSpecializeConstrained(right_generic_context),
-            ) => ConstraintSet::from(left_generic_context == right_generic_context),
+            ) => {
+                ConstraintSet::from_bool(constraints, left_generic_context == right_generic_context)
+            }
 
             (
                 KnownBoundMethodType::FunctionTypeDunderGet(_)
@@ -11310,7 +11349,7 @@ impl<'db> KnownBoundMethodType<'db> {
                 | KnownBoundMethodType::ConstraintSetSatisfies(_)
                 | KnownBoundMethodType::ConstraintSetSatisfiedByAllTypeVars(_)
                 | KnownBoundMethodType::GenericContextSpecializeConstrained(_),
-            ) => ConstraintSet::from(false),
+            ) => ConstraintSet::from_bool(constraints, false),
         }
     }
 
@@ -12530,28 +12569,28 @@ impl<'db> UnionType<'db> {
         self,
         db: &'db dyn Db,
         other: Self,
-        _constraints: &ConstraintSetBuilder<'db>,
+        constraints: &ConstraintSetBuilder<'db>,
         _inferable: InferableTypeVars<'_, 'db>,
         _visitor: &IsEquivalentVisitor<'db>,
     ) -> ConstraintSet<'db> {
         if self == other {
-            return ConstraintSet::from(true);
+            return ConstraintSet::from_bool(constraints, true);
         }
 
         let self_elements = self.elements(db);
         let other_elements = other.elements(db);
 
         if self_elements.len() != other_elements.len() {
-            return ConstraintSet::from(false);
+            return ConstraintSet::from_bool(constraints, false);
         }
 
         let sorted_self = self.normalized(db);
 
         if sorted_self == Type::Union(other) {
-            return ConstraintSet::from(true);
+            return ConstraintSet::from_bool(constraints, true);
         }
 
-        ConstraintSet::from(sorted_self == other.normalized(db))
+        ConstraintSet::from_bool(constraints, sorted_self == other.normalized(db))
     }
 
     /// Identify some specific unions of known classes, currently the ones that `float` and
@@ -12935,35 +12974,35 @@ impl<'db> IntersectionType<'db> {
         self,
         db: &'db dyn Db,
         other: Self,
-        _constraints: &ConstraintSetBuilder<'db>,
+        constraints: &ConstraintSetBuilder<'db>,
         _inferable: InferableTypeVars<'_, 'db>,
         _visitor: &IsEquivalentVisitor<'db>,
     ) -> ConstraintSet<'db> {
         if self == other {
-            return ConstraintSet::from(true);
+            return ConstraintSet::from_bool(constraints, true);
         }
 
         let self_positive = self.positive(db);
         let other_positive = other.positive(db);
 
         if self_positive.len() != other_positive.len() {
-            return ConstraintSet::from(false);
+            return ConstraintSet::from_bool(constraints, false);
         }
 
         let self_negative = self.negative(db);
         let other_negative = other.negative(db);
 
         if self_negative.len() != other_negative.len() {
-            return ConstraintSet::from(false);
+            return ConstraintSet::from_bool(constraints, false);
         }
 
         let sorted_self = self.normalized(db);
 
         if sorted_self == other {
-            return ConstraintSet::from(true);
+            return ConstraintSet::from_bool(constraints, true);
         }
 
-        ConstraintSet::from(sorted_self == other.normalized(db))
+        ConstraintSet::from_bool(constraints, sorted_self == other.normalized(db))
     }
 
     /// Returns an iterator over the positive elements of the intersection. If

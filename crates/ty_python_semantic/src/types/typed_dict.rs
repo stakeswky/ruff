@@ -155,24 +155,24 @@ impl<'db> TypedDictType<'db> {
             && let Some(target_defining_class) = target.defining_class()
             && defining_class.is_subclass_of(db, target_defining_class)
         {
-            return ConstraintSet::from(true);
+            return ConstraintSet::from_bool(constraints, true);
         }
 
         let self_items = self.items(db);
         let target_items = target.items(db);
         // Many rules violations short-circuit with "never", but asking whether one field is
         // [relation] to/of another can produce more complicated constraints, and we collect those.
-        let mut result = ConstraintSet::from(true);
+        let mut result = ConstraintSet::from_bool(constraints, true);
         for (target_item_name, target_item_field) in target_items {
             let field_constraints = if target_item_field.is_required() {
                 // required target fields
                 let Some(self_item_field) = self_items.get(target_item_name) else {
                     // Self is missing a required field.
-                    return ConstraintSet::from(false);
+                    return ConstraintSet::from_bool(constraints, false);
                 };
                 if !self_item_field.is_required() {
                     // A required field is not required in self.
-                    return ConstraintSet::from(false);
+                    return ConstraintSet::from_bool(constraints, false);
                 }
                 if target_item_field.is_read_only() {
                     // For `ReadOnly[]` fields in the target, the corresponding fields in
@@ -191,7 +191,7 @@ impl<'db> TypedDictType<'db> {
                 } else {
                     if self_item_field.is_read_only() {
                         // A read-only field can't be assigned to a mutable target.
-                        return ConstraintSet::from(false);
+                        return ConstraintSet::from_bool(constraints, false);
                     }
                     // For mutable fields in the target, the relation needs to apply both
                     // ways, or else mutating the target could violate the structural
@@ -250,6 +250,7 @@ impl<'db> TypedDictType<'db> {
                         Type::object().when_assignable_to(
                             db,
                             target_item_field.declared_ty,
+                            constraints,
                             inferable,
                         )
                     }
@@ -260,12 +261,12 @@ impl<'db> TypedDictType<'db> {
                     if let Some(self_item_field) = self_items.get(target_item_name) {
                         if self_item_field.is_read_only() {
                             // A read-only field can't be assigned to a mutable target.
-                            return ConstraintSet::from(false);
+                            return ConstraintSet::from_bool(constraints, false);
                         }
                         if self_item_field.is_required() {
                             // A required field can't be assigned to a not-required, mutable field
                             // in the target, because `del` is allowed on the target field.
-                            return ConstraintSet::from(false);
+                            return ConstraintSet::from_bool(constraints, false);
                         }
 
                         // As above, for mutable fields in the target, the relation needs
@@ -299,7 +300,7 @@ impl<'db> TypedDictType<'db> {
                         // interaction between two structural assignability rules prevents
                         // unsoundness" in `typed_dict.md`.
                         // TODO: `closed` and `extra_items` support will go here.
-                        ConstraintSet::from(false)
+                        ConstraintSet::from_bool(constraints, false)
                     }
                 }
             };
@@ -352,14 +353,14 @@ impl<'db> TypedDictType<'db> {
         // sorted order instead of paying for a lookup for each field, as long as their lengths are
         // the same.
         if self.items(db).len() != other.items(db).len() {
-            return ConstraintSet::from(false);
+            return ConstraintSet::from_bool(constraints, false);
         }
         self.items(db).iter().zip(other.items(db)).when_all(
             db,
             constraints,
             |((name, field), (other_name, other_field))| {
                 if name != other_name || field.flags != other_field.flags {
-                    return ConstraintSet::from(false);
+                    return ConstraintSet::from_bool(constraints, false);
                 }
                 field.declared_ty.is_equivalent_to_impl(
                     db,
@@ -449,7 +450,7 @@ impl<'db> TypedDictType<'db> {
                 {
                     // One side demands a `Required` source field, while the other side demands a
                     // `NotRequired` one. They must be disjoint.
-                    return ConstraintSet::from(true);
+                    return ConstraintSet::from_bool(constraints, true);
                 }
             }
             if !self_field.is_read_only() && !other_field.is_read_only() {

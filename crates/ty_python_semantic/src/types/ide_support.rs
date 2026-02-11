@@ -6,6 +6,7 @@ use crate::semantic_index::definition::Definition;
 use crate::semantic_index::definition::DefinitionKind;
 use crate::semantic_index::{attribute_scopes, global_scope, semantic_index, use_def_map};
 use crate::types::call::{CallArguments, CallError, MatchedArgument};
+use crate::types::constraints::ConstraintSetBuilder;
 use crate::types::signatures::{ParameterKind, Signature};
 use crate::types::{
     CallDunderError, CallableTypes, ClassBase, ClassLiteral, ClassType, KnownUnion, Type,
@@ -695,9 +696,10 @@ pub fn call_type_simplified_by_overloads(
     });
 
     // Try to resolve overloads with the arguments/types we have
+    let constraints = ConstraintSetBuilder::new();
     let mut resolved = bindings
         .match_parameters(db, &args)
-        .check_types(db, &args, TypeContext::default(), &[])
+        .check_types(db, &constraints, &args, TypeContext::default(), &[])
         // Only use the Ok
         .iter()
         .flatten()
@@ -882,10 +884,11 @@ fn resolve_call_signature<'db>(
     });
 
     // Extract the `Bindings` regardless of whether type checking succeeded or failed.
+    let constraints = ConstraintSetBuilder::new();
     let bindings = callable_type
         .bindings(db)
         .match_parameters(db, &args)
-        .check_types(db, &args, TypeContext::default(), &[])
+        .check_types(db, &constraints, &args, TypeContext::default(), &[])
         .unwrap_or_else(|CallError(_, bindings)| *bindings);
 
     // First, try to find the matching overload after full type checking.
