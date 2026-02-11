@@ -383,7 +383,7 @@ impl<'db> Type<'db> {
             && (self.is_type_var() || target.is_type_var())
         {
             let given = relation_visitor.extra;
-            return given.implies_subtype_of(db, self, target);
+            return given.implies_subtype_of(db, constraints, self, target);
         }
 
         // Handle the new constraint-set-based assignability relation next. Comparisons with a
@@ -809,7 +809,7 @@ impl<'db> Type<'db> {
                     // Failing that, if the concrete base type is a union, try delegating to that.
                     // Otherwise, this would be equivalent to what we just checked, and we
                     // shouldn't waste time checking it twice.
-                    .or(db, || {
+                    .or(db, constraints, || {
                         let concrete_base = self_newtype.concrete_base_type(db);
                         if matches!(concrete_base, Type::Union(_)) {
                             concrete_base.has_relation_to_impl(
@@ -878,7 +878,7 @@ impl<'db> Type<'db> {
                         disjointness_visitor,
                     )
                 })
-                .and(db, || {
+                .and(db, constraints, || {
                     // For subtyping, we would want to check whether the *top materialization* of `self`
                     // is disjoint from the *top materialization* of `neg_ty`. As an optimization, however,
                     // we can avoid this explicit transformation here, since our `Type::is_disjoint_from`
@@ -1339,7 +1339,7 @@ impl<'db> Type<'db> {
                     relation_visitor,
                     disjointness_visitor,
                 )
-                .and(db, || {
+                .and(db, constraints, || {
                     right.return_type(db).has_relation_to_impl(
                         db,
                         left.return_type(db),
@@ -1532,9 +1532,10 @@ impl<'db> Type<'db> {
                         relation_visitor,
                         disjointness_visitor,
                     )
-                    .or(db, || {
+                    .or(db, constraints, || {
                         ConstraintSet::from_bool(constraints, relation.is_assignability()).and(
                             db,
+                            constraints,
                             || {
                                 other.has_relation_to_impl(
                                     db,
@@ -2070,7 +2071,7 @@ impl<'db> Type<'db> {
                                 relation_visitor,
                             )
                         })
-                        .or(db, || {
+                        .or(db, constraints, || {
                             other_intersection
                                 .positive(db)
                                 .iter()
@@ -2105,7 +2106,7 @@ impl<'db> Type<'db> {
                             )
                         })
                         // A & B & Not[C] is disjoint from C
-                        .or(db, || {
+                        .or(db, constraints, || {
                             intersection
                                 .negative(db)
                                 .iter()
@@ -2354,7 +2355,7 @@ impl<'db> Type<'db> {
                     constraints,
                     left_alias.origin(db) != right_alias.origin(db),
                 )
-                .or(db, || {
+                .or(db, constraints, || {
                     left_alias.specialization(db).is_disjoint_from_impl(
                         db,
                         right_alias.specialization(db),
@@ -2472,7 +2473,7 @@ impl<'db> Type<'db> {
                 // (it cannot be an instance of a `bool` subclass)
                 KnownClass::Bool
                     .when_subclass_of(db, instance.class(db), constraints)
-                    .negate(db)
+                    .negate(db, constraints)
             }
 
             (Type::BooleanLiteral(..) | Type::TypeIs(_) | Type::TypeGuard(_), _)
@@ -2486,7 +2487,7 @@ impl<'db> Type<'db> {
                 // (it cannot be an instance of an `int` subclass)
                 KnownClass::Int
                     .when_subclass_of(db, instance.class(db), constraints)
-                    .negate(db)
+                    .negate(db, constraints)
             }
 
             (Type::IntLiteral(..), _) | (_, Type::IntLiteral(..)) => {
@@ -2504,7 +2505,7 @@ impl<'db> Type<'db> {
                 // (it cannot be an instance of a `str` subclass)
                 KnownClass::Str
                     .when_subclass_of(db, instance.class(db), constraints)
-                    .negate(db)
+                    .negate(db, constraints)
             }
 
             (Type::LiteralString, Type::LiteralString) => {
@@ -2520,7 +2521,7 @@ impl<'db> Type<'db> {
                 // (it cannot be an instance of a `bytes` subclass)
                 KnownClass::Bytes
                     .when_subclass_of(db, instance.class(db), constraints)
-                    .negate(db)
+                    .negate(db, constraints)
             }
 
             (Type::EnumLiteral(enum_literal), instance @ Type::NominalInstance(_))
@@ -2536,7 +2537,7 @@ impl<'db> Type<'db> {
                         relation_visitor,
                         disjointness_visitor,
                     )
-                    .negate(db)
+                    .negate(db, constraints)
             }
             (Type::EnumLiteral(..), _) | (_, Type::EnumLiteral(..)) => {
                 ConstraintSet::from_bool(constraints, true)
@@ -2549,7 +2550,7 @@ impl<'db> Type<'db> {
             | (instance @ Type::NominalInstance(_), Type::ClassLiteral(class)) => class
                 .metaclass_instance_type(db)
                 .when_subtype_of(db, instance, constraints, inferable)
-                .negate(db),
+                .negate(db, constraints),
             (Type::GenericAlias(alias), instance @ Type::NominalInstance(_))
             | (instance @ Type::NominalInstance(_), Type::GenericAlias(alias)) => {
                 ClassType::from(alias)
@@ -2563,7 +2564,7 @@ impl<'db> Type<'db> {
                         relation_visitor,
                         disjointness_visitor,
                     )
-                    .negate(db)
+                    .negate(db, constraints)
             }
 
             (Type::FunctionLiteral(..), Type::NominalInstance(instance))
@@ -2572,7 +2573,7 @@ impl<'db> Type<'db> {
                 // (it cannot be an instance of a `types.FunctionType` subclass)
                 KnownClass::FunctionType
                     .when_subclass_of(db, instance.class(db), constraints)
-                    .negate(db)
+                    .negate(db, constraints)
             }
 
             (Type::BoundMethod(_), other) | (other, Type::BoundMethod(_)) => KnownClass::MethodType
@@ -2661,7 +2662,7 @@ impl<'db> Type<'db> {
                             relation_visitor,
                             disjointness_visitor,
                         )
-                        .negate(db)
+                        .negate(db, constraints)
                 }),
 
             (
@@ -2728,7 +2729,7 @@ impl<'db> Type<'db> {
 
             (Type::BoundSuper(_), Type::BoundSuper(_)) => self
                 .when_equivalent_to(db, other, constraints, inferable)
-                .negate(db),
+                .negate(db, constraints),
             (Type::BoundSuper(_), other) | (other, Type::BoundSuper(_)) => {
                 KnownClass::Super.to_instance(db).is_disjoint_from_impl(
                     db,
@@ -2772,7 +2773,7 @@ impl<'db> Type<'db> {
                     relation_visitor,
                     disjointness_visitor,
                 )
-                .negate(db),
+                .negate(db, constraints),
         }
     }
 }

@@ -13363,12 +13363,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 Type::IntLiteral(!i64::from(bool))
             }
 
-            (
-                ast::UnaryOp::Invert,
-                Type::KnownInstance(KnownInstanceType::ConstraintSet(constraints)),
-            ) => {
-                let constraints = constraints.constraints(self.db());
-                let result = constraints.negate(self.db());
+            (ast::UnaryOp::Invert, Type::KnownInstance(KnownInstanceType::ConstraintSet(set))) => {
+                let constraints = ConstraintSetBuilder::new();
+                let set = set.constraints(self.db());
+                let result = set.negate(self.db(), &constraints);
                 Type::KnownInstance(KnownInstanceType::ConstraintSet(
                     InternedConstraintSet::new(self.db(), result),
                 ))
@@ -14019,9 +14017,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 Type::KnownInstance(KnownInstanceType::ConstraintSet(right)),
                 ast::Operator::BitAnd,
             ) => {
+                let constraints = ConstraintSetBuilder::new();
                 let left = left.constraints(self.db());
                 let right = right.constraints(self.db());
-                let result = left.and(self.db(), || right);
+                let result = left.and(self.db(), &constraints, || right);
                 Some(Type::KnownInstance(KnownInstanceType::ConstraintSet(
                     InternedConstraintSet::new(self.db(), result),
                 )))
@@ -14032,9 +14031,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 Type::KnownInstance(KnownInstanceType::ConstraintSet(right)),
                 ast::Operator::BitOr,
             ) => {
+                let constraints = ConstraintSetBuilder::new();
                 let left = left.constraints(self.db());
                 let right = right.constraints(self.db());
-                let result = left.or(self.db(), || right);
+                let result = left.or(self.db(), &constraints, || right);
                 Some(Type::KnownInstance(KnownInstanceType::ConstraintSet(
                     InternedConstraintSet::new(self.db(), result),
                 )))
@@ -14884,14 +14884,16 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
             (
                 Type::KnownInstance(KnownInstanceType::ConstraintSet(left)),
                 Type::KnownInstance(KnownInstanceType::ConstraintSet(right)),
-            ) => match op {
-                ast::CmpOp::Eq => Some(Ok(Type::BooleanLiteral(
-                    left.constraints(self.db()).iff(self.db(), right.constraints(self.db())).is_always_satisfied(self.db()),
-                ))),
-                ast::CmpOp::NotEq => Some(Ok(Type::BooleanLiteral(
-                    !left.constraints(self.db()).iff(self.db(), right.constraints(self.db())).is_always_satisfied(self.db()),
-                ))),
-                _ => None,
+            ) => {
+                let constraints = ConstraintSetBuilder::new();
+                let left = left.constraints(self.db());
+                let right = right.constraints(self.db());
+                let equivalent = left.iff(self.db(), &constraints, right).is_always_satisfied(self.db());
+                match op {
+                    ast::CmpOp::Eq => Some(Ok(Type::BooleanLiteral(equivalent))),
+                    ast::CmpOp::NotEq => Some(Ok(Type::BooleanLiteral(!equivalent))),
+                    _ => None,
+                }
             }
 
             (

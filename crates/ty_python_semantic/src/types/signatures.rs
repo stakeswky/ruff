@@ -424,7 +424,7 @@ impl<'db> CallableSignature<'db> {
                         relation_visitor,
                         disjointness_visitor,
                     );
-                    return param_spec_matches.and(db, || return_types_match);
+                    return param_spec_matches.and(db, constraints, || return_types_match);
                 }
 
                 (Some((self_bound_typevar, self_return_type)), None) => {
@@ -462,7 +462,7 @@ impl<'db> CallableSignature<'db> {
                                 disjointness_visitor,
                             )
                         });
-                    return param_spec_matches.and(db, || return_types_match);
+                    return param_spec_matches.and(db, constraints, || return_types_match);
                 }
 
                 (None, Some((other_bound_typevar, other_return_type))) => {
@@ -500,7 +500,7 @@ impl<'db> CallableSignature<'db> {
                                 disjointness_visitor,
                             )
                         });
-                    return param_spec_matches.and(db, || return_types_match);
+                    return param_spec_matches.and(db, constraints, || return_types_match);
                 }
 
                 (None, None) => {}
@@ -599,7 +599,7 @@ impl<'db> CallableSignature<'db> {
                     return ConstraintSet::from_bool(constraints, true);
                 }
                 self.is_subtype_of_impl(db, other, constraints, inferable)
-                    .and(db, || {
+                    .and(db, constraints, || {
                         other.is_subtype_of_impl(db, self, constraints, inferable)
                     })
             }
@@ -1055,7 +1055,11 @@ impl<'db> Signature<'db> {
         // we produce, we reduce it back down to the inferable set that the caller asked about.
         // If we introduced new inferable typevars, those will be existentially quantified away
         // before returning.
-        when.reduce_inferable(db, self_inferable.iter().chain(other_inferable.iter()))
+        when.reduce_inferable(
+            db,
+            constraints,
+            self_inferable.iter().chain(other_inferable.iter()),
+        )
     }
 
     fn is_equivalent_to_inner(
@@ -1080,6 +1084,7 @@ impl<'db> Signature<'db> {
             !result
                 .intersect(
                     db,
+                    constraints,
                     self_type.is_equivalent_to_impl(
                         db,
                         other_type,
@@ -1191,7 +1196,7 @@ impl<'db> Signature<'db> {
                         inferable,
                     )
                 });
-            return param_spec_matches.and(db, || return_types_match);
+            return param_spec_matches.and(db, constraints, || return_types_match);
         }
 
         other
@@ -1264,7 +1269,11 @@ impl<'db> Signature<'db> {
         // we produce, we reduce it back down to the inferable set that the caller asked about.
         // If we introduced new inferable typevars, those will be existentially quantified away
         // before returning.
-        when.reduce_inferable(db, self_inferable.iter().chain(other_inferable.iter()))
+        when.reduce_inferable(
+            db,
+            constraints,
+            self_inferable.iter().chain(other_inferable.iter()),
+        )
     }
 
     #[expect(clippy::too_many_arguments)]
@@ -1367,6 +1376,7 @@ impl<'db> Signature<'db> {
             !result
                 .intersect(
                     db,
+                    constraints,
                     type1.has_relation_to_impl(
                         db,
                         type2,
@@ -1413,6 +1423,7 @@ impl<'db> Signature<'db> {
         if self.parameters.is_gradual() || other.parameters.is_gradual() {
             result.intersect(
                 db,
+                constraints,
                 ConstraintSet::from_bool(
                     constraints,
                     relation.is_assignability() || relation.is_constraint_set_assignability(),
@@ -1436,7 +1447,7 @@ impl<'db> Signature<'db> {
                         Type::TypeVar(other_bound_typevar),
                         Type::TypeVar(other_bound_typevar),
                     );
-                    result.intersect(db, param_spec_matches);
+                    result.intersect(db, constraints, param_spec_matches);
                     return result;
                 }
 
@@ -1457,7 +1468,7 @@ impl<'db> Signature<'db> {
                         Type::Never,
                         upper,
                     );
-                    result.intersect(db, param_spec_matches);
+                    result.intersect(db, constraints, param_spec_matches);
                     return result;
                 }
 
@@ -1478,7 +1489,7 @@ impl<'db> Signature<'db> {
                         lower,
                         Type::object(),
                     );
-                    result.intersect(db, param_spec_matches);
+                    result.intersect(db, constraints, param_spec_matches);
                     return result;
                 }
 

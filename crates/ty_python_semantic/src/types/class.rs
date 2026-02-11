@@ -1190,7 +1190,7 @@ impl<'db> ClassType<'db> {
                     // Two generic classes match if they have the same origin and compatible specializations.
                     (ClassType::Generic(base), ClassType::Generic(other)) => {
                         ConstraintSet::from_bool(constraints, base.origin(db) == other.origin(db))
-                            .and(db, || {
+                            .and(db, constraints, || {
                                 base.specialization(db).has_relation_to_impl(
                                     db,
                                     other.specialization(db),
@@ -1236,7 +1236,7 @@ impl<'db> ClassType<'db> {
                 constraints,
                 this.origin(db) == other.origin(db),
             )
-            .and(db, || {
+            .and(db, constraints, || {
                 this.specialization(db).is_equivalent_to_impl(
                     db,
                     other.specialization(db),

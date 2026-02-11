@@ -209,7 +209,7 @@ impl<'db> TypedDictType<'db> {
                             relation_visitor,
                             disjointness_visitor,
                         )
-                        .and(db, || {
+                        .and(db, constraints, || {
                             target_item_field.declared_ty.has_relation_to_impl(
                                 db,
                                 self_item_field.declared_ty,
@@ -282,7 +282,7 @@ impl<'db> TypedDictType<'db> {
                                 relation_visitor,
                                 disjointness_visitor,
                             )
-                            .and(db, || {
+                            .and(db, constraints, || {
                                 target_item_field.declared_ty.has_relation_to_impl(
                                     db,
                                     self_item_field.declared_ty,
@@ -304,7 +304,7 @@ impl<'db> TypedDictType<'db> {
                     }
                 }
             };
-            result.intersect(db, field_constraints);
+            result.intersect(db, constraints, field_constraints);
             if result.is_never_satisfied(db) {
                 return result;
             }
@@ -467,7 +467,7 @@ impl<'db> TypedDictType<'db> {
                         relation_visitor,
                         disjointness_visitor,
                     )
-                    .and(db, || {
+                    .and(db, constraints, || {
                         other_field.declared_ty.has_relation_to_impl(
                             db,
                             self_field.declared_ty,
@@ -478,7 +478,7 @@ impl<'db> TypedDictType<'db> {
                             disjointness_visitor,
                         )
                     })
-                    .negate(db)
+                    .negate(db, constraints)
             } else if !self_field.is_read_only() {
                 // Half of condition 3 above.
                 self_field
@@ -492,7 +492,7 @@ impl<'db> TypedDictType<'db> {
                         relation_visitor,
                         disjointness_visitor,
                     )
-                    .negate(db)
+                    .negate(db, constraints)
             } else if !other_field.is_read_only() {
                 // The other half of condition 3 above.
                 other_field
@@ -506,7 +506,7 @@ impl<'db> TypedDictType<'db> {
                         relation_visitor,
                         disjointness_visitor,
                     )
-                    .negate(db)
+                    .negate(db, constraints)
             } else {
                 // Condition 4 above.
                 self_field.declared_ty.is_disjoint_from_impl(

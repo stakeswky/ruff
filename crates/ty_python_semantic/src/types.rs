@@ -594,7 +594,7 @@ impl<'db> PropertyInstanceType<'db> {
             }
         };
 
-        getter_equivalence.and(db, setter_equivalence)
+        getter_equivalence.and(db, constraints, setter_equivalence)
     }
 }
 
@@ -10690,7 +10690,7 @@ impl<'db> BoundMethodType<'db> {
                 relation_visitor,
                 disjointness_visitor,
             )
-            .and(db, || {
+            .and(db, constraints, || {
                 other.self_instance(db).has_relation_to_impl(
                     db,
                     self.self_instance(db),
@@ -10713,7 +10713,7 @@ impl<'db> BoundMethodType<'db> {
     ) -> ConstraintSet<'db> {
         self.function(db)
             .is_equivalent_to_impl(db, other.function(db), constraints, inferable, visitor)
-            .and(db, || {
+            .and(db, constraints, || {
                 other.self_instance(db).is_equivalent_to_impl(
                     db,
                     self.self_instance(db),
@@ -10978,7 +10978,7 @@ impl<'db> CallableType<'db> {
             constraints,
             self.is_function_like(db) == other.is_function_like(db),
         )
-        .and(db, || {
+        .and(db, constraints, || {
             self.signatures(db).is_equivalent_to_impl(
                 db,
                 other.signatures(db),
@@ -11313,9 +11313,11 @@ impl<'db> KnownBoundMethodType<'db> {
             | (
                 KnownBoundMethodType::ConstraintSetSatisfiedByAllTypeVars(left_constraints),
                 KnownBoundMethodType::ConstraintSetSatisfiedByAllTypeVars(right_constraints),
-            ) => left_constraints
-                .constraints(db)
-                .iff(db, right_constraints.constraints(db)),
+            ) => left_constraints.constraints(db).iff(
+                db,
+                constraints,
+                right_constraints.constraints(db),
+            ),
 
             (
                 KnownBoundMethodType::GenericContextSpecializeConstrained(left_generic_context),

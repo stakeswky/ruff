@@ -351,7 +351,7 @@ impl<'db> ProtocolInterface<'db> {
                             constraints,
                             our_member.qualifiers.contains(TypeQualifiers::CLASS_VAR),
                         )
-                        .and(db, || {
+                        .and(db, constraints, || {
                             our_type.has_relation_to_impl(
                                 db,
                                 Type::Callable(protocol_bind_self(db, other_type, None)),
@@ -389,7 +389,7 @@ impl<'db> ProtocolInterface<'db> {
                                 relation_visitor,
                                 disjointness_visitor,
                             )
-                            .and(db, || {
+                            .and(db, constraints, || {
                                 other_type.has_relation_to_impl(
                                     db,
                                     our_type,
@@ -880,7 +880,7 @@ impl<'a, 'db> ProtocolMember<'a, 'db> {
                         relation_visitor,
                         disjointness_visitor,
                     )
-                    .and(db, || {
+                    .and(db, constraints, || {
                         attribute_type.has_relation_to_impl(
                             db,
                             *member_type,
