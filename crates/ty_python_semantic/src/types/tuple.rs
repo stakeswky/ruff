@@ -277,16 +277,16 @@ impl<'db> TupleType<'db> {
     }
 
     #[expect(clippy::too_many_arguments)]
-    pub(crate) fn has_relation_to_impl(
+    pub(crate) fn has_relation_to_impl<'c>(
         self,
         db: &'db dyn Db,
         other: Self,
-        constraints: &ConstraintSetBuilder<'db>,
+        constraints: &'c ConstraintSetBuilder<'db>,
         inferable: InferableTypeVars<'_, 'db>,
         relation: TypeRelation,
-        relation_visitor: &HasRelationToVisitor<'db>,
-        disjointness_visitor: &IsDisjointVisitor<'db>,
-    ) -> ConstraintSet<'db> {
+        relation_visitor: &HasRelationToVisitor<'db, 'c>,
+        disjointness_visitor: &IsDisjointVisitor<'db, 'c>,
+    ) -> ConstraintSet<'db, 'c> {
         self.tuple(db).has_relation_to_impl(
             db,
             other.tuple(db),
@@ -298,15 +298,15 @@ impl<'db> TupleType<'db> {
         )
     }
 
-    pub(crate) fn is_disjoint_from_impl(
+    pub(crate) fn is_disjoint_from_impl<'c>(
         self,
         db: &'db dyn Db,
         other: Self,
-        constraints: &ConstraintSetBuilder<'db>,
+        constraints: &'c ConstraintSetBuilder<'db>,
         inferable: InferableTypeVars<'_, 'db>,
-        disjointness_visitor: &IsDisjointVisitor<'db>,
-        relation_visitor: &HasRelationToVisitor<'db>,
-    ) -> ConstraintSet<'db> {
+        disjointness_visitor: &IsDisjointVisitor<'db, 'c>,
+        relation_visitor: &HasRelationToVisitor<'db, 'c>,
+    ) -> ConstraintSet<'db, 'c> {
         self.tuple(db).is_disjoint_from_impl(
             db,
             other.tuple(db),
@@ -317,14 +317,14 @@ impl<'db> TupleType<'db> {
         )
     }
 
-    pub(crate) fn is_equivalent_to_impl(
+    pub(crate) fn is_equivalent_to_impl<'c>(
         self,
         db: &'db dyn Db,
         other: Self,
-        constraints: &ConstraintSetBuilder<'db>,
+        constraints: &'c ConstraintSetBuilder<'db>,
         inferable: InferableTypeVars<'_, 'db>,
-        visitor: &IsEquivalentVisitor<'db>,
-    ) -> ConstraintSet<'db> {
+        visitor: &IsEquivalentVisitor<'db, 'c>,
+    ) -> ConstraintSet<'db, 'c> {
         self.tuple(db)
             .is_equivalent_to_impl(db, other.tuple(db), constraints, inferable, visitor)
     }
@@ -514,16 +514,16 @@ impl<'db> FixedLengthTuple<Type<'db>> {
     }
 
     #[expect(clippy::too_many_arguments)]
-    fn has_relation_to_impl(
+    fn has_relation_to_impl<'c>(
         &self,
         db: &'db dyn Db,
         other: &Tuple<Type<'db>>,
-        constraints: &ConstraintSetBuilder<'db>,
+        constraints: &'c ConstraintSetBuilder<'db>,
         inferable: InferableTypeVars<'_, 'db>,
         relation: TypeRelation,
-        relation_visitor: &HasRelationToVisitor<'db>,
-        disjointness_visitor: &IsDisjointVisitor<'db>,
-    ) -> ConstraintSet<'db> {
+        relation_visitor: &HasRelationToVisitor<'db, 'c>,
+        disjointness_visitor: &IsDisjointVisitor<'db, 'c>,
+    ) -> ConstraintSet<'db, 'c> {
         match other {
             Tuple::Fixed(other) => ConstraintSet::from_bool(
                 constraints,
@@ -608,14 +608,14 @@ impl<'db> FixedLengthTuple<Type<'db>> {
         }
     }
 
-    fn is_equivalent_to_impl(
+    fn is_equivalent_to_impl<'c>(
         &self,
         db: &'db dyn Db,
         other: &Self,
-        constraints: &ConstraintSetBuilder<'db>,
+        constraints: &'c ConstraintSetBuilder<'db>,
         inferable: InferableTypeVars<'_, 'db>,
-        visitor: &IsEquivalentVisitor<'db>,
-    ) -> ConstraintSet<'db> {
+        visitor: &IsEquivalentVisitor<'db, 'c>,
+    ) -> ConstraintSet<'db, 'c> {
         ConstraintSet::from_bool(constraints, self.0.len() == other.0.len()).and(
             db,
             constraints,
@@ -1039,16 +1039,16 @@ impl<'db> VariableLengthTuple<Type<'db>> {
     }
 
     #[expect(clippy::too_many_arguments)]
-    fn has_relation_to_impl(
+    fn has_relation_to_impl<'c>(
         &self,
         db: &'db dyn Db,
         other: &Tuple<Type<'db>>,
-        constraints: &ConstraintSetBuilder<'db>,
+        constraints: &'c ConstraintSetBuilder<'db>,
         inferable: InferableTypeVars<'_, 'db>,
         relation: TypeRelation,
-        relation_visitor: &HasRelationToVisitor<'db>,
-        disjointness_visitor: &IsDisjointVisitor<'db>,
-    ) -> ConstraintSet<'db> {
+        relation_visitor: &HasRelationToVisitor<'db, 'c>,
+        disjointness_visitor: &IsDisjointVisitor<'db, 'c>,
+    ) -> ConstraintSet<'db, 'c> {
         match other {
             Tuple::Fixed(other) => {
                 // The `...` length specifier of a variable-length tuple type is interpreted
@@ -1256,14 +1256,14 @@ impl<'db> VariableLengthTuple<Type<'db>> {
         }
     }
 
-    fn is_equivalent_to_impl(
+    fn is_equivalent_to_impl<'c>(
         &self,
         db: &'db dyn Db,
         other: &Self,
-        constraints: &ConstraintSetBuilder<'db>,
+        constraints: &'c ConstraintSetBuilder<'db>,
         inferable: InferableTypeVars<'_, 'db>,
-        visitor: &IsEquivalentVisitor<'db>,
-    ) -> ConstraintSet<'db> {
+        visitor: &IsEquivalentVisitor<'db, 'c>,
+    ) -> ConstraintSet<'db, 'c> {
         self.variable()
             .is_equivalent_to_impl(db, other.variable(), constraints, inferable, visitor)
             .and(db, constraints, || {
@@ -1523,16 +1523,16 @@ impl<'db> Tuple<Type<'db>> {
     }
 
     #[expect(clippy::too_many_arguments)]
-    fn has_relation_to_impl(
+    fn has_relation_to_impl<'c>(
         &self,
         db: &'db dyn Db,
         other: &Self,
-        constraints: &ConstraintSetBuilder<'db>,
+        constraints: &'c ConstraintSetBuilder<'db>,
         inferable: InferableTypeVars<'_, 'db>,
         relation: TypeRelation,
-        relation_visitor: &HasRelationToVisitor<'db>,
-        disjointness_visitor: &IsDisjointVisitor<'db>,
-    ) -> ConstraintSet<'db> {
+        relation_visitor: &HasRelationToVisitor<'db, 'c>,
+        disjointness_visitor: &IsDisjointVisitor<'db, 'c>,
+    ) -> ConstraintSet<'db, 'c> {
         match self {
             Tuple::Fixed(self_tuple) => self_tuple.has_relation_to_impl(
                 db,
@@ -1555,14 +1555,14 @@ impl<'db> Tuple<Type<'db>> {
         }
     }
 
-    fn is_equivalent_to_impl(
+    fn is_equivalent_to_impl<'c>(
         &self,
         db: &'db dyn Db,
         other: &Self,
-        constraints: &ConstraintSetBuilder<'db>,
+        constraints: &'c ConstraintSetBuilder<'db>,
         inferable: InferableTypeVars<'_, 'db>,
-        visitor: &IsEquivalentVisitor<'db>,
-    ) -> ConstraintSet<'db> {
+        visitor: &IsEquivalentVisitor<'db, 'c>,
+    ) -> ConstraintSet<'db, 'c> {
         match (self, other) {
             (Tuple::Fixed(self_tuple), Tuple::Fixed(other_tuple)) => {
                 self_tuple.is_equivalent_to_impl(db, other_tuple, constraints, inferable, visitor)
@@ -1576,15 +1576,15 @@ impl<'db> Tuple<Type<'db>> {
         }
     }
 
-    pub(super) fn is_disjoint_from_impl(
+    pub(super) fn is_disjoint_from_impl<'c>(
         &self,
         db: &'db dyn Db,
         other: &Self,
-        constraints: &ConstraintSetBuilder<'db>,
+        constraints: &'c ConstraintSetBuilder<'db>,
         inferable: InferableTypeVars<'_, 'db>,
-        disjointness_visitor: &IsDisjointVisitor<'db>,
-        relation_visitor: &HasRelationToVisitor<'db>,
-    ) -> ConstraintSet<'db> {
+        disjointness_visitor: &IsDisjointVisitor<'db, 'c>,
+        relation_visitor: &HasRelationToVisitor<'db, 'c>,
+    ) -> ConstraintSet<'db, 'c> {
         // Two tuples with an incompatible number of required elements must always be disjoint.
         let (self_min, self_max) = self.len().size_hint();
         let (other_min, other_max) = other.len().size_hint();
@@ -1598,16 +1598,16 @@ impl<'db> Tuple<Type<'db>> {
         // If any of the required elements are pairwise disjoint, the tuples are disjoint as well.
         #[allow(clippy::items_after_statements)]
         #[expect(clippy::too_many_arguments)]
-        fn any_disjoint<'s, 'db>(
+        fn any_disjoint<'s, 'db, 'c>(
             db: &'db dyn Db,
             a: &'s [Type<'db>],
             b: &'s [Type<'db>],
-            constraints: &ConstraintSetBuilder<'db>,
+            constraints: &'c ConstraintSetBuilder<'db>,
             inferable: InferableTypeVars<'_, 'db>,
-            disjointness_visitor: &IsDisjointVisitor<'db>,
-            relation_visitor: &HasRelationToVisitor<'db>,
+            disjointness_visitor: &IsDisjointVisitor<'db, 'c>,
+            relation_visitor: &HasRelationToVisitor<'db, 'c>,
             rev: bool,
-        ) -> ConstraintSet<'db>
+        ) -> ConstraintSet<'db, 'c>
         where
             'db: 's,
         {

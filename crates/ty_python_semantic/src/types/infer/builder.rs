@@ -13365,8 +13365,10 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
 
             (ast::UnaryOp::Invert, Type::KnownInstance(KnownInstanceType::ConstraintSet(set))) => {
                 let constraints = ConstraintSetBuilder::new();
-                let set = set.constraints(self.db());
-                let result = set.negate(self.db(), &constraints);
+                let result = constraints.into_owned(|constraints| {
+                    let set = constraints.load(set.constraints(self.db()));
+                    set.negate(self.db(), constraints)
+                });
                 Type::KnownInstance(KnownInstanceType::ConstraintSet(
                     InternedConstraintSet::new(self.db(), result),
                 ))
@@ -14018,9 +14020,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 ast::Operator::BitAnd,
             ) => {
                 let constraints = ConstraintSetBuilder::new();
-                let left = left.constraints(self.db());
-                let right = right.constraints(self.db());
-                let result = left.and(self.db(), &constraints, || right);
+                let result = constraints.into_owned(|constraints| {
+                    let left = constraints.load(left.constraints(self.db()));
+                    let right = constraints.load(right.constraints(self.db()));
+                    left.and(self.db(), constraints, || right)
+                });
                 Some(Type::KnownInstance(KnownInstanceType::ConstraintSet(
                     InternedConstraintSet::new(self.db(), result),
                 )))
@@ -14032,9 +14036,11 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 ast::Operator::BitOr,
             ) => {
                 let constraints = ConstraintSetBuilder::new();
-                let left = left.constraints(self.db());
-                let right = right.constraints(self.db());
-                let result = left.or(self.db(), &constraints, || right);
+                let result = constraints.into_owned(|constraints| {
+                    let left = constraints.load(left.constraints(self.db()));
+                    let right = constraints.load(right.constraints(self.db()));
+                    left.or(self.db(), constraints, || right)
+                });
                 Some(Type::KnownInstance(KnownInstanceType::ConstraintSet(
                     InternedConstraintSet::new(self.db(), result),
                 )))
@@ -14886,9 +14892,12 @@ impl<'db, 'ast> TypeInferenceBuilder<'db, 'ast> {
                 Type::KnownInstance(KnownInstanceType::ConstraintSet(right)),
             ) => {
                 let constraints = ConstraintSetBuilder::new();
-                let left = left.constraints(self.db());
-                let right = right.constraints(self.db());
-                let equivalent = left.iff(self.db(), &constraints, right).is_always_satisfied(self.db());
+                let result = constraints.into_owned(|constraints| {
+                    let left = constraints.load(left.constraints(self.db()));
+                    let right = constraints.load(right.constraints(self.db()));
+                    left.iff(self.db(), constraints, right)
+                });
+                let equivalent = result.is_always_satisfied(self.db());
                 match op {
                     ast::CmpOp::Eq => Some(Ok(Type::BooleanLiteral(equivalent))),
                     ast::CmpOp::NotEq => Some(Ok(Type::BooleanLiteral(!equivalent))),

@@ -145,16 +145,16 @@ impl<'db> Type<'db> {
 
     /// Return `true` if `self` conforms to the interface described by `protocol`.
     #[expect(clippy::too_many_arguments)]
-    pub(super) fn satisfies_protocol(
+    pub(super) fn satisfies_protocol<'c>(
         self,
         db: &'db dyn Db,
         protocol: ProtocolInstanceType<'db>,
-        constraints: &ConstraintSetBuilder<'db>,
+        constraints: &'c ConstraintSetBuilder<'db>,
         inferable: InferableTypeVars<'_, 'db>,
         relation: TypeRelation,
-        relation_visitor: &HasRelationToVisitor<'db>,
-        disjointness_visitor: &IsDisjointVisitor<'db>,
-    ) -> ConstraintSet<'db> {
+        relation_visitor: &HasRelationToVisitor<'db, 'c>,
+        disjointness_visitor: &IsDisjointVisitor<'db, 'c>,
+    ) -> ConstraintSet<'db, 'c> {
         // `self` might satisfy the protocol nominally, if `protocol` is a class-based protocol and
         // `self` has the protocol class in its MRO. This is a much cheaper check than the
         // structural check we perform below, so we do it first to avoid the structural check when
@@ -434,16 +434,16 @@ impl<'db> NominalInstanceType<'db> {
     }
 
     #[expect(clippy::too_many_arguments)]
-    pub(super) fn has_relation_to_impl(
+    pub(super) fn has_relation_to_impl<'c>(
         self,
         db: &'db dyn Db,
         other: Self,
-        constraints: &ConstraintSetBuilder<'db>,
+        constraints: &'c ConstraintSetBuilder<'db>,
         inferable: InferableTypeVars<'_, 'db>,
         relation: TypeRelation,
-        relation_visitor: &HasRelationToVisitor<'db>,
-        disjointness_visitor: &IsDisjointVisitor<'db>,
-    ) -> ConstraintSet<'db> {
+        relation_visitor: &HasRelationToVisitor<'db, 'c>,
+        disjointness_visitor: &IsDisjointVisitor<'db, 'c>,
+    ) -> ConstraintSet<'db, 'c> {
         match (self.0, other.0) {
             (_, NominalInstanceInner::Object) => ConstraintSet::from_bool(constraints, true),
             (
@@ -470,14 +470,14 @@ impl<'db> NominalInstanceType<'db> {
         }
     }
 
-    pub(super) fn is_equivalent_to_impl(
+    pub(super) fn is_equivalent_to_impl<'c>(
         self,
         db: &'db dyn Db,
         other: Self,
-        constraints: &ConstraintSetBuilder<'db>,
+        constraints: &'c ConstraintSetBuilder<'db>,
         inferable: InferableTypeVars<'_, 'db>,
-        visitor: &IsEquivalentVisitor<'db>,
-    ) -> ConstraintSet<'db> {
+        visitor: &IsEquivalentVisitor<'db, 'c>,
+    ) -> ConstraintSet<'db, 'c> {
         match (self.0, other.0) {
             (
                 NominalInstanceInner::ExactTuple(tuple1),
@@ -493,15 +493,15 @@ impl<'db> NominalInstanceType<'db> {
         }
     }
 
-    pub(super) fn is_disjoint_from_impl(
+    pub(super) fn is_disjoint_from_impl<'c>(
         self,
         db: &'db dyn Db,
         other: Self,
-        constraints: &ConstraintSetBuilder<'db>,
+        constraints: &'c ConstraintSetBuilder<'db>,
         inferable: InferableTypeVars<'_, 'db>,
-        disjointness_visitor: &IsDisjointVisitor<'db>,
-        relation_visitor: &HasRelationToVisitor<'db>,
-    ) -> ConstraintSet<'db> {
+        disjointness_visitor: &IsDisjointVisitor<'db, 'c>,
+        relation_visitor: &HasRelationToVisitor<'db, 'c>,
+    ) -> ConstraintSet<'db, 'c> {
         if self.is_object() || other.is_object() {
             return ConstraintSet::from_bool(constraints, false);
         }
@@ -808,14 +808,14 @@ impl<'db> ProtocolInstanceType<'db> {
     /// Return `true` if this protocol type is equivalent to the protocol `other`.
     ///
     /// TODO: consider the types of the members as well as their existence
-    pub(super) fn is_equivalent_to_impl(
+    pub(super) fn is_equivalent_to_impl<'c>(
         self,
         db: &'db dyn Db,
         other: Self,
-        constraints: &ConstraintSetBuilder<'db>,
+        constraints: &'c ConstraintSetBuilder<'db>,
         _inferable: InferableTypeVars<'_, 'db>,
-        _visitor: &IsEquivalentVisitor<'db>,
-    ) -> ConstraintSet<'db> {
+        _visitor: &IsEquivalentVisitor<'db, 'c>,
+    ) -> ConstraintSet<'db, 'c> {
         if self == other {
             return ConstraintSet::from_bool(constraints, true);
         }
@@ -831,14 +831,14 @@ impl<'db> ProtocolInstanceType<'db> {
     /// TODO: a protocol `X` is disjoint from a protocol `Y` if `X` and `Y`
     /// have a member with the same name but disjoint types
     #[expect(clippy::unused_self)]
-    pub(super) fn is_disjoint_from_impl(
+    pub(super) fn is_disjoint_from_impl<'c>(
         self,
         _db: &'db dyn Db,
         _other: Self,
-        constraints: &ConstraintSetBuilder<'db>,
+        constraints: &'c ConstraintSetBuilder<'db>,
         _inferable: InferableTypeVars<'_, 'db>,
-        _visitor: &IsDisjointVisitor<'db>,
-    ) -> ConstraintSet<'db> {
+        _visitor: &IsDisjointVisitor<'db, 'c>,
+    ) -> ConstraintSet<'db, 'c> {
         ConstraintSet::from_bool(constraints, false)
     }
 

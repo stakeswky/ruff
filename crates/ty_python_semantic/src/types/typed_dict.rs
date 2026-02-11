@@ -138,16 +138,16 @@ impl<'db> TypedDictType<'db> {
     // Subtyping between `TypedDict`s follows the algorithm described at:
     // https://typing.python.org/en/latest/spec/typeddict.html#subtyping-between-typeddict-types
     #[expect(clippy::too_many_arguments)]
-    pub(super) fn has_relation_to_impl(
+    pub(super) fn has_relation_to_impl<'c>(
         self,
         db: &'db dyn Db,
         target: TypedDictType<'db>,
-        constraints: &ConstraintSetBuilder<'db>,
+        constraints: &'c ConstraintSetBuilder<'db>,
         inferable: InferableTypeVars<'_, 'db>,
         relation: TypeRelation,
-        relation_visitor: &HasRelationToVisitor<'db>,
-        disjointness_visitor: &IsDisjointVisitor<'db>,
-    ) -> ConstraintSet<'db> {
+        relation_visitor: &HasRelationToVisitor<'db, 'c>,
+        disjointness_visitor: &IsDisjointVisitor<'db, 'c>,
+    ) -> ConstraintSet<'db, 'c> {
         // First do a quick nominal check that (if it succeeds) means that we can avoid
         // materializing the full `TypedDict` schema for either `self` or `target`.
         // This should be cheaper in many cases, and also helps us avoid some cycles.
@@ -338,14 +338,14 @@ impl<'db> TypedDictType<'db> {
         }
     }
 
-    pub(crate) fn is_equivalent_to_impl(
+    pub(crate) fn is_equivalent_to_impl<'c>(
         self,
         db: &'db dyn Db,
         other: TypedDictType<'db>,
-        constraints: &ConstraintSetBuilder<'db>,
+        constraints: &'c ConstraintSetBuilder<'db>,
         inferable: InferableTypeVars<'_, 'db>,
-        visitor: &IsEquivalentVisitor<'db>,
-    ) -> ConstraintSet<'db> {
+        visitor: &IsEquivalentVisitor<'db, 'c>,
+    ) -> ConstraintSet<'db, 'c> {
         // TODO: `closed` and `extra_items` support will go here. Until then we don't look at the
         // params at all, because `total` is already incorporated into `FieldKind`.
 
@@ -432,15 +432,15 @@ impl<'db> TypedDictType<'db> {
     ///    be assignable to both.)
     ///
     /// TODO: Adding support for `closed` and `extra_items` will complicate this.
-    pub(crate) fn is_disjoint_from_impl(
+    pub(crate) fn is_disjoint_from_impl<'c>(
         self,
         db: &'db dyn Db,
         other: TypedDictType<'db>,
-        constraints: &ConstraintSetBuilder<'db>,
+        constraints: &'c ConstraintSetBuilder<'db>,
         inferable: InferableTypeVars<'_, 'db>,
-        disjointness_visitor: &IsDisjointVisitor<'db>,
-        relation_visitor: &HasRelationToVisitor<'db>,
-    ) -> ConstraintSet<'db> {
+        disjointness_visitor: &IsDisjointVisitor<'db, 'c>,
+        relation_visitor: &HasRelationToVisitor<'db, 'c>,
+    ) -> ConstraintSet<'db, 'c> {
         let fields_in_common = btreemap_values_with_same_key(self.items(db), other.items(db));
         fields_in_common.when_any(db, constraints, |(self_field, other_field)| {
             // Condition 1 above.
