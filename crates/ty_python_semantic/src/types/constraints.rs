@@ -751,14 +751,174 @@ impl<'db> ConstraintSetBuilderInner<'db> {
 
     /// Creates a new BDD node for an individual constraint. (The BDD will evaluate to `true` when
     /// the constraint holds, and to `false` when it does not.)
-    fn new_constraint(&mut self, constraint_id: ConstraintId, source_order: usize) -> NodeId {
+    fn new_constraint_node(
+        &mut self,
+        typevar: BoundTypeVarInstance<'db>,
+        lower: Type<'db>,
+        upper: Type<'db>,
+    ) -> NodeId {
+        let constraint_id = self.intern_constraint(ConstrainedTypeVarNew {
+            typevar,
+            lower,
+            upper,
+        });
         self.intern_node(InteriorNodeNew {
             constraint_id,
             if_true_id: ALWAYS_TRUE,
             if_false_id: ALWAYS_FALSE,
-            source_order,
-            max_source_order: source_order,
+            source_order: 1,
+            max_source_order: 1,
         })
+    }
+
+    /// Returns a new range constraint.
+    fn new_range_constraint(
+        &mut self,
+        db: &'db dyn Db,
+        typevar: BoundTypeVarInstance<'db>,
+        mut lower: Type<'db>,
+        mut upper: Type<'db>,
+    ) -> NodeId {
+        // It's not useful for an upper bound to be an intersection type, or for a lower bound to
+        // be a union type. Because the following equivalences hold, we can break these bounds
+        // apart and create an equivalent BDD with more nodes but simpler constraints. (Fewer,
+        // simpler constraints mean that our sequent maps won't grow pathologically large.)
+        //
+        //   T ≤ (α & β)   ⇔ (T ≤ α) ∧ (T ≤ β)
+        //   T ≤ (¬α & ¬β) ⇔ (T ≤ ¬α) ∧ (T ≤ ¬β)
+        //   (α | β) ≤ T   ⇔ (α ≤ T) ∧ (β ≤ T)
+        if let Type::Union(lower_union) = lower {
+            let mut node_id = ALWAYS_TRUE;
+            for lower_element in lower_union.elements(db) {
+                let element_node_id = self.new_range_constraint(db, typevar, *lower_element, upper);
+                node_id = self.and_with_offset(node_id, element_node_id);
+            }
+            return node_id;
+        }
+        // A negated type ¬α is represented as an intersection with no positive elements, and a
+        // single negative element. We _don't_ want to treat that an "intersection" for the
+        // purposes of simplifying upper bounds.
+        if let Type::Intersection(upper_intersection) = upper
+            && !upper_intersection.is_simple_negation(db)
+        {
+            let mut node_id = ALWAYS_TRUE;
+            for upper_element in upper_intersection.iter_positive(db) {
+                let element_node_id = self.new_range_constraint(db, typevar, lower, upper_element);
+                node_id = self.and_with_offset(node_id, element_node_id);
+            }
+            for upper_element in upper_intersection.iter_negative(db) {
+                let element_node_id =
+                    self.new_range_constraint(db, typevar, lower, upper_element.negate(db));
+                node_id = self.and_with_offset(node_id, element_node_id);
+            }
+            return node_id;
+        }
+
+        // Two identical typevars must always solve to the same type, so it is not useful to have
+        // an upper or lower bound that is the typevar being constrained.
+        match lower {
+            Type::TypeVar(lower_bound_typevar)
+                if typevar.is_same_typevar_as(db, lower_bound_typevar) =>
+            {
+                lower = Type::Never;
+            }
+            Type::Intersection(intersection)
+                if intersection.positive(db).iter().any(|element| {
+                    element.as_typevar().is_some_and(|element_bound_typevar| {
+                        typevar.is_same_typevar_as(db, element_bound_typevar)
+                    })
+                }) =>
+            {
+                lower = Type::Never;
+            }
+            Type::Intersection(intersection)
+                if intersection.negative(db).iter().any(|element| {
+                    element.as_typevar().is_some_and(|element_bound_typevar| {
+                        typevar.is_same_typevar_as(db, element_bound_typevar)
+                    })
+                }) =>
+            {
+                let node_id = self.new_constraint_node(typevar, Type::Never, Type::object());
+                return self.negate(node_id);
+            }
+            _ => {}
+        }
+        match upper {
+            Type::TypeVar(upper_bound_typevar)
+                if typevar.is_same_typevar_as(db, upper_bound_typevar) =>
+            {
+                upper = Type::object();
+            }
+            Type::Union(union)
+                if union.elements(db).iter().any(|element| {
+                    element.as_typevar().is_some_and(|element_bound_typevar| {
+                        typevar.is_same_typevar_as(db, element_bound_typevar)
+                    })
+                }) =>
+            {
+                upper = Type::object();
+            }
+            _ => {}
+        }
+
+        // If `lower ≰ upper`, then the constraint cannot be satisfied, since there is no type that
+        // is both greater than `lower`, and less than `upper`.
+        if !lower.is_constraint_set_assignable_to(db, upper) {
+            return ALWAYS_FALSE;
+        }
+
+        // We have an (arbitrary) ordering for typevars. If the upper and/or lower bounds are
+        // typevars, we have to ensure that the bounds are "later" according to that order than the
+        // typevar being constrained.
+        //
+        // In the comments below, we use brackets to indicate which typevar is "earlier", and
+        // therefore the typevar that the constraint applies to.
+        match (lower, upper) {
+            // L ≤ T ≤ L == (T ≤ [L] ≤ T)
+            (Type::TypeVar(lower), Type::TypeVar(upper)) if lower.is_same_typevar_as(db, upper) => {
+                let (bound, typevar) = if lower.can_be_bound_for(db, typevar) {
+                    (lower, typevar)
+                } else {
+                    (typevar, lower)
+                };
+                self.new_constraint_node(typevar, Type::TypeVar(bound), Type::TypeVar(bound))
+            }
+
+            // L ≤ T ≤ U == ([L] ≤ T) && (T ≤ [U])
+            (Type::TypeVar(lower), Type::TypeVar(upper))
+                if typevar.can_be_bound_for(db, lower) && typevar.can_be_bound_for(db, upper) =>
+            {
+                let lower_id = self.new_constraint_node(lower, Type::Never, Type::TypeVar(typevar));
+                let upper_id =
+                    self.new_constraint_node(upper, Type::TypeVar(typevar), Type::object());
+                self.and(lower_id, upper_id)
+            }
+
+            // L ≤ T ≤ U == ([L] ≤ T) && ([T] ≤ U)
+            (Type::TypeVar(lower), _) if typevar.can_be_bound_for(db, lower) => {
+                let lower_id = self.new_constraint_node(lower, Type::Never, Type::TypeVar(typevar));
+                let upper_id = if upper.is_object() {
+                    ALWAYS_TRUE
+                } else {
+                    self.new_range_constraint(db, typevar, Type::Never, upper)
+                };
+                self.and(lower_id, upper_id)
+            }
+
+            // L ≤ T ≤ U == (L ≤ [T]) && (T ≤ [U])
+            (_, Type::TypeVar(upper)) if typevar.can_be_bound_for(db, upper) => {
+                let lower_id = if lower.is_never() {
+                    ALWAYS_TRUE
+                } else {
+                    self.new_range_constraint(db, typevar, lower, Type::object())
+                };
+                let upper_id =
+                    self.new_constraint_node(upper, Type::TypeVar(typevar), Type::object());
+                self.and(lower_id, upper_id)
+            }
+
+            _ => self.new_constraint_node(typevar, lower, upper),
+        }
     }
 
     fn constraint_ordering(&self, constraint_id: ConstraintId) -> impl Ord + use<> {
