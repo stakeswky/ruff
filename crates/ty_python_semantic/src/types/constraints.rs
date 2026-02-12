@@ -592,6 +592,10 @@ impl NodeId {
     fn is_terminal(self) -> bool {
         self.0 >= SMALLEST_TERMINAL.0
     }
+
+    fn is_interior(self) -> bool {
+        !self.is_terminal()
+    }
 }
 
 /// A special ID that is used for an "always true" / "always visible" constraint.
@@ -647,6 +651,7 @@ struct ConstraintSetBuilderInner<'db> {
     storage: ConstraintSetStorage<'db>,
     constraint_cache: FxHashMap<ConstrainedTypeVarNew<'db>, ConstraintId>,
     node_cache: FxHashMap<InteriorNodeNew, NodeId>,
+    and_cache: FxHashMap<(NodeId, NodeId, usize), NodeId>,
 }
 
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq, get_size2::GetSize, salsa::Update)]
@@ -756,6 +761,98 @@ impl<'db> ConstraintSetBuilderInner<'db> {
 
     fn constraint_ordering(&self, constraint_id: ConstraintId) -> impl Ord + use<> {
         std::cmp::Reverse(constraint_id)
+    }
+
+    /// Returns a copy of a BDD node with all `source_order`s adjusted by the given amount.
+    fn with_adjusted_source_order(&mut self, node_id: NodeId, delta: usize) -> NodeId {
+        if delta == 0 {
+            return node_id;
+        }
+        let NodeNew::Interior(interior) = self.node(node_id) else {
+            return node_id;
+        };
+        let if_true_id = self.with_adjusted_source_order(interior.if_true_id, delta);
+        let if_false_id = self.with_adjusted_source_order(interior.if_false_id, delta);
+        return self.new_node(
+            interior.constraint_id,
+            if_true_id,
+            if_false_id,
+            interior.source_order + delta,
+        );
+    }
+
+    /// Returns the `and` or intersection of two BDDs.
+    ///
+    /// In the result, the lhs will appear before the rhs according to the `source_order` of the
+    /// BDD nodes.
+    fn and_with_offset(&mut self, lhs_id: NodeId, rhs_id: NodeId) -> NodeId {
+        // To ensure that `lhs` appears before `rhs` in `source_order`, we add the maximum
+        // `source_order` of the lhs to all of the `source_order`s in the rhs.
+        let rhs_offset = self.node(lhs_id).max_source_order();
+        self.and_inner(lhs_id, rhs_id, rhs_offset)
+    }
+
+    fn and(&mut self, lhs_id: NodeId, rhs_id: NodeId) -> NodeId {
+        self.and_inner(lhs_id, rhs_id, 0)
+    }
+
+    fn and_inner(&mut self, lhs_id: NodeId, rhs_id: NodeId, rhs_offset: usize) -> NodeId {
+        let key = (lhs_id, rhs_id, rhs_offset);
+        if let Some(cached) = self.and_cache.get(&key) {
+            return *cached;
+        }
+        let result = self.and_uncached(lhs_id, rhs_id, rhs_offset);
+        self.and_cache.insert(key, result);
+        result
+    }
+
+    fn and_uncached(&mut self, lhs_id: NodeId, rhs_id: NodeId, rhs_offset: usize) -> NodeId {
+        let lhs = self.node(lhs_id);
+        let rhs = self.node(rhs_id);
+        match (lhs, rhs) {
+            (NodeNew::AlwaysFalse, NodeNew::AlwaysFalse) => ALWAYS_FALSE,
+            (NodeNew::AlwaysFalse, NodeNew::Interior(rhs)) => self.new_node(
+                rhs.constraint_id,
+                ALWAYS_FALSE,
+                ALWAYS_FALSE,
+                rhs.source_order + rhs_offset,
+            ),
+            (NodeNew::Interior(lhs), NodeNew::AlwaysFalse) => self.new_node(
+                lhs.constraint_id,
+                ALWAYS_FALSE,
+                ALWAYS_FALSE,
+                lhs.source_order,
+            ),
+            (NodeNew::AlwaysTrue, _) => self.with_adjusted_source_order(rhs_id, rhs_offset),
+            (_, NodeNew::AlwaysTrue) => lhs_id,
+            (NodeNew::Interior(lhs), NodeNew::Interior(rhs)) => {
+                let lhs_ordering = self.constraint_ordering(lhs.constraint_id);
+                let rhs_ordering = self.constraint_ordering(rhs.constraint_id);
+                match lhs_ordering.cmp(&rhs_ordering) {
+                    Ordering::Equal => {
+                        let if_true_id = self.and_inner(lhs.if_true_id, rhs.if_true_id, rhs_offset);
+                        let if_false_id =
+                            self.and_inner(lhs.if_false_id, rhs.if_false_id, rhs_offset);
+                        self.new_node(lhs.constraint_id, if_true_id, if_false_id, lhs.source_order)
+                    }
+                    Ordering::Less => {
+                        let if_true_id = self.and_inner(lhs.if_true_id, rhs_id, rhs_offset);
+                        let if_false_id = self.and_inner(lhs.if_false_id, rhs_id, rhs_offset);
+                        self.new_node(lhs.constraint_id, if_true_id, if_false_id, lhs.source_order)
+                    }
+                    Ordering::Greater => {
+                        let if_true_id = self.and_inner(lhs_id, rhs.if_true_id, rhs_offset);
+                        let if_false_id = self.and_inner(lhs_id, rhs.if_false_id, rhs_offset);
+                        self.new_node(
+                            rhs.constraint_id,
+                            if_true_id,
+                            if_false_id,
+                            rhs.source_order + rhs_offset,
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
