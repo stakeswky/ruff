@@ -651,6 +651,7 @@ struct ConstraintSetBuilderInner<'db> {
     storage: ConstraintSetStorage<'db>,
     constraint_cache: FxHashMap<ConstrainedTypeVarNew<'db>, ConstraintId>,
     node_cache: FxHashMap<InteriorNodeNew, NodeId>,
+    or_cache: FxHashMap<(NodeId, NodeId, usize), NodeId>,
     and_cache: FxHashMap<(NodeId, NodeId, usize), NodeId>,
 }
 
@@ -779,6 +780,80 @@ impl<'db> ConstraintSetBuilderInner<'db> {
             if_false_id,
             interior.source_order + delta,
         );
+    }
+
+    /// Returns the `or` or intersection of two BDDs.
+    ///
+    /// In the result, the lhs will appear before the rhs according to the `source_order` of the
+    /// BDD nodes.
+    fn or_with_offset(&mut self, lhs_id: NodeId, rhs_id: NodeId) -> NodeId {
+        // To ensure that `lhs` appears before `rhs` in `source_order`, we add the maximum
+        // `source_order` of the lhs to all of the `source_order`s in the rhs.
+        let rhs_offset = self.node(lhs_id).max_source_order();
+        self.or_inner(lhs_id, rhs_id, rhs_offset)
+    }
+
+    fn or(&mut self, lhs_id: NodeId, rhs_id: NodeId) -> NodeId {
+        self.or_inner(lhs_id, rhs_id, 0)
+    }
+
+    fn or_inner(&mut self, lhs_id: NodeId, rhs_id: NodeId, rhs_offset: usize) -> NodeId {
+        let key = (lhs_id, rhs_id, rhs_offset);
+        if let Some(cached) = self.or_cache.get(&key) {
+            return *cached;
+        }
+        let result = self.or_uncached(lhs_id, rhs_id, rhs_offset);
+        self.or_cache.insert(key, result);
+        result
+    }
+
+    fn or_uncached(&mut self, lhs_id: NodeId, rhs_id: NodeId, rhs_offset: usize) -> NodeId {
+        let lhs = self.node(lhs_id);
+        let rhs = self.node(rhs_id);
+        match (lhs, rhs) {
+            (NodeNew::AlwaysTrue, NodeNew::AlwaysTrue) => ALWAYS_TRUE,
+            (NodeNew::AlwaysTrue, NodeNew::Interior(rhs)) => self.new_node(
+                rhs.constraint_id,
+                ALWAYS_TRUE,
+                ALWAYS_TRUE,
+                rhs.source_order + rhs_offset,
+            ),
+            (NodeNew::Interior(lhs), NodeNew::AlwaysTrue) => self.new_node(
+                lhs.constraint_id,
+                ALWAYS_TRUE,
+                ALWAYS_TRUE,
+                lhs.source_order,
+            ),
+            (NodeNew::AlwaysFalse, _) => self.with_adjusted_source_order(rhs_id, rhs_offset),
+            (_, NodeNew::AlwaysFalse) => lhs_id,
+            (NodeNew::Interior(lhs), NodeNew::Interior(rhs)) => {
+                let lhs_ordering = self.constraint_ordering(lhs.constraint_id);
+                let rhs_ordering = self.constraint_ordering(rhs.constraint_id);
+                match lhs_ordering.cmp(&rhs_ordering) {
+                    Ordering::Equal => {
+                        let if_true_id = self.or_inner(lhs.if_true_id, rhs.if_true_id, rhs_offset);
+                        let if_false_id =
+                            self.or_inner(lhs.if_false_id, rhs.if_false_id, rhs_offset);
+                        self.new_node(lhs.constraint_id, if_true_id, if_false_id, lhs.source_order)
+                    }
+                    Ordering::Less => {
+                        let if_true_id = self.or_inner(lhs.if_true_id, rhs_id, rhs_offset);
+                        let if_false_id = self.or_inner(lhs.if_false_id, rhs_id, rhs_offset);
+                        self.new_node(lhs.constraint_id, if_true_id, if_false_id, lhs.source_order)
+                    }
+                    Ordering::Greater => {
+                        let if_true_id = self.or_inner(lhs_id, rhs.if_true_id, rhs_offset);
+                        let if_false_id = self.or_inner(lhs_id, rhs.if_false_id, rhs_offset);
+                        self.new_node(
+                            rhs.constraint_id,
+                            if_true_id,
+                            if_false_id,
+                            rhs.source_order + rhs_offset,
+                        )
+                    }
+                }
+            }
+        }
     }
 
     /// Returns the `and` or intersection of two BDDs.
