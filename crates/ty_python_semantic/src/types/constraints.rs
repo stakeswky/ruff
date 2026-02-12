@@ -74,6 +74,7 @@ use std::ops::Range;
 
 use indexmap::map::Entry;
 use itertools::Itertools;
+use ruff_index::{Idx, IndexVec, newtype_index};
 use rustc_hash::{FxHashMap, FxHashSet};
 use salsa::plumbing::AsId;
 use smallvec::SmallVec;
@@ -580,14 +581,78 @@ impl Debug for ConstraintSet<'_, '_> {
     }
 }
 
+/// The index of a BDD node within a [`ConstraintSetStorage`].
+///
+/// By construction, interior nodes can only refer to nodes with smaller indexes (since the nodes
+/// that outgoing edges point at must already exist).
+#[derive(Clone, Copy, Eq, Hash, PartialEq, get_size2::GetSize)]
+struct NodeId(u32);
+
+impl NodeId {
+    fn is_terminal(self) -> bool {
+        self.0 >= SMALLEST_TERMINAL.0
+    }
+}
+
+/// A special ID that is used for an "always true" / "always visible" constraint.
+const ALWAYS_TRUE: NodeId = NodeId(0xffff_ffff);
+
+/// A special ID that is used for an "always false" / "never visible" constraint.
+const ALWAYS_FALSE: NodeId = NodeId(0xffff_fffe);
+
+const SMALLEST_TERMINAL: NodeId = ALWAYS_FALSE;
+
+impl Debug for NodeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut f = f.debug_tuple("Node");
+        match *self {
+            // We use format_args instead of rendering the strings directly so that we don't get
+            // any quotes in the output: ScopedReachabilityConstraintId(AlwaysTrue) instead of
+            // ScopedReachabilityConstraintId("AlwaysTrue").
+            ALWAYS_TRUE => f.field(&format_args!("AlwaysTrue")),
+            ALWAYS_FALSE => f.field(&format_args!("AlwaysFalse")),
+            _ => f.field(&self.0),
+        };
+        f.finish()
+    }
+}
+
+impl Idx for NodeId {
+    #[inline]
+    fn new(value: usize) -> Self {
+        assert!(value <= (SMALLEST_TERMINAL.0 as usize));
+        #[expect(clippy::cast_possible_truncation)]
+        Self(value as u32)
+    }
+
+    #[inline]
+    fn index(self) -> usize {
+        debug_assert!(!self.is_terminal());
+        self.0 as usize
+    }
+}
+
+/// The index of an individual constraint (i.e. a BDD variable) within a [`ConstraintSetStorage`].
+#[newtype_index]
+#[derive(Ord, PartialOrd, salsa::Update, get_size2::GetSize)]
+pub struct ConstraintId;
+
 #[derive(Default)]
 pub(crate) struct ConstraintSetBuilder<'db> {
-    storage: RefCell<ConstraintSetStorage<'db>>,
+    inner: RefCell<ConstraintSetBuilderInner<'db>>,
+}
+
+#[derive(Default)]
+struct ConstraintSetBuilderInner<'db> {
+    storage: ConstraintSetStorage<'db>,
+    constraint_cache: FxHashMap<ConstrainedTypeVarNew<'db>, ConstraintId>,
+    node_cache: FxHashMap<InteriorNodeNew, NodeId>,
 }
 
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq, get_size2::GetSize, salsa::Update)]
 struct ConstraintSetStorage<'db> {
-    _dummy: PhantomData<&'db ()>,
+    constraints: IndexVec<ConstraintId, ConstrainedTypeVarNew<'db>>,
+    nodes: IndexVec<NodeId, InteriorNodeNew>,
 }
 
 impl<'db> ConstraintSetBuilder<'db> {
@@ -603,7 +668,7 @@ impl<'db> ConstraintSetBuilder<'db> {
         let node = constraint.node;
         OwnedConstraintSet {
             node,
-            storage: self.storage.into_inner(),
+            storage: self.inner.into_inner().storage,
         }
     }
 
@@ -613,6 +678,84 @@ impl<'db> ConstraintSetBuilder<'db> {
         // storing the constraints in ConstraintSetStorage, this will need to copy the relevant BDD
         // nodes from other's storage into ourselves.
         ConstraintSet::from_node(self, other.node)
+    }
+}
+
+impl<'db> ConstraintSetBuilderInner<'db> {
+    fn constraint(&self, constraint_id: ConstraintId) -> &ConstrainedTypeVarNew<'db> {
+        &self.storage.constraints[constraint_id]
+    }
+
+    fn node(&self, node_id: NodeId) -> NodeNew {
+        match node_id {
+            ALWAYS_FALSE => NodeNew::AlwaysFalse,
+            ALWAYS_TRUE => NodeNew::AlwaysTrue,
+            _ => NodeNew::Interior(self.storage.nodes[node_id]),
+        }
+    }
+
+    fn intern_constraint(&mut self, constraint: ConstrainedTypeVarNew<'db>) -> ConstraintId {
+        *self
+            .constraint_cache
+            .entry(constraint.clone())
+            .or_insert_with(|| self.storage.constraints.push(constraint))
+    }
+
+    fn intern_node(&mut self, node: InteriorNodeNew) -> NodeId {
+        *self
+            .node_cache
+            .entry(node.clone())
+            .or_insert_with(|| self.storage.nodes.push(node))
+    }
+
+    /// Creates a new BDD node, ensuring that it is quasi-reduced.
+    fn new_node(
+        &mut self,
+        constraint_id: ConstraintId,
+        if_true_id: NodeId,
+        if_false_id: NodeId,
+        source_order: usize,
+    ) -> NodeId {
+        let if_true = self.node(if_true_id);
+        let if_false = self.node(if_false_id);
+        debug_assert!(if_true.into_interior().is_none_or(|node| {
+            self.constraint_ordering(node.constraint_id) > self.constraint_ordering(constraint_id)
+        }));
+        debug_assert!(if_false.into_interior().is_none_or(|node| {
+            self.constraint_ordering(node.constraint_id) > self.constraint_ordering(constraint_id)
+        }));
+
+        if if_true_id == ALWAYS_FALSE && if_false_id == ALWAYS_FALSE {
+            return ALWAYS_FALSE;
+        }
+
+        let max_source_order = source_order
+            .max(if_true.max_source_order())
+            .max(if_false.max_source_order());
+
+        self.intern_node(InteriorNodeNew {
+            constraint_id,
+            if_true_id,
+            if_false_id,
+            source_order,
+            max_source_order,
+        })
+    }
+
+    /// Creates a new BDD node for an individual constraint. (The BDD will evaluate to `true` when
+    /// the constraint holds, and to `false` when it does not.)
+    fn new_constraint(&mut self, constraint_id: ConstraintId, source_order: usize) -> NodeId {
+        self.intern_node(InteriorNodeNew {
+            constraint_id,
+            if_true_id: ALWAYS_TRUE,
+            if_false_id: ALWAYS_FALSE,
+            source_order,
+            max_source_order: source_order,
+        })
+    }
+
+    fn constraint_ordering(&self, constraint_id: ConstraintId) -> impl Ord + use<> {
+        std::cmp::Reverse(constraint_id)
     }
 }
 
@@ -642,6 +785,15 @@ impl IntersectionResult<'_> {
     fn is_disjoint(self) -> bool {
         matches!(self, IntersectionResult::Disjoint)
     }
+}
+
+/// An individual constraint in a constraint set. This restricts a single typevar to be within a
+/// lower and upper bound.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, get_size2::GetSize, salsa::Update)]
+struct ConstrainedTypeVarNew<'db> {
+    typevar: BoundTypeVarInstance<'db>,
+    lower: Type<'db>,
+    upper: Type<'db>,
 }
 
 /// An individual constraint in a constraint set. This restricts a single typevar to be within a
@@ -1051,6 +1203,29 @@ impl<'db> ConstrainedTypeVar<'db> {
 /// cannot use this ordering as our BDD variable ordering, since we calculate it from already
 /// constructed BDDs, and we need the BDD variable ordering to be fixed and available before
 /// construction starts.)
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, get_size2::GetSize, salsa::Update)]
+enum NodeNew {
+    AlwaysFalse,
+    AlwaysTrue,
+    Interior(InteriorNodeNew),
+}
+
+impl NodeNew {
+    fn max_source_order(self) -> usize {
+        match self {
+            NodeNew::AlwaysFalse | NodeNew::AlwaysTrue => 0,
+            NodeNew::Interior(interior) => interior.max_source_order,
+        }
+    }
+
+    fn into_interior(self) -> Option<InteriorNodeNew> {
+        match self {
+            NodeNew::AlwaysFalse | NodeNew::AlwaysTrue => None,
+            NodeNew::Interior(interior) => Some(interior),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, get_size2::GetSize, salsa::Update)]
 enum Node<'db> {
     AlwaysFalse,
@@ -2136,6 +2311,24 @@ impl<'db> RepresentativeBounds<'db> {
             source_order,
         }
     }
+}
+
+/// An interior node of a BDD
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, get_size2::GetSize, salsa::Update)]
+struct InteriorNodeNew {
+    constraint_id: ConstraintId,
+    if_true_id: NodeId,
+    if_false_id: NodeId,
+
+    /// Represents the order in which this node's constraint was added to the containing constraint
+    /// set, relative to all of the other constraints in the set. This starts off at 1 for a simple
+    /// single-constraint set (e.g. created with [`Node::new_constraint`] or
+    /// [`Node::new_satisfied_constraint`]). It will get incremented, if needed, as that simple BDD
+    /// is combined into larger BDDs.
+    source_order: usize,
+
+    /// The maximum `source_order` across this node and all of its descendants.
+    max_source_order: usize,
 }
 
 /// An interior node of a BDD
