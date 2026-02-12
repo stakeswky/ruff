@@ -651,6 +651,7 @@ struct ConstraintSetBuilderInner<'db> {
     storage: ConstraintSetStorage<'db>,
     constraint_cache: FxHashMap<ConstrainedTypeVarNew<'db>, ConstraintId>,
     node_cache: FxHashMap<InteriorNodeNew, NodeId>,
+    negate_cache: FxHashMap<NodeId, NodeId>,
     or_cache: FxHashMap<(NodeId, NodeId, usize), NodeId>,
     and_cache: FxHashMap<(NodeId, NodeId, usize), NodeId>,
 }
@@ -780,6 +781,32 @@ impl<'db> ConstraintSetBuilderInner<'db> {
             if_false_id,
             interior.source_order + delta,
         );
+    }
+
+    /// Returns the negation of this BDD.
+    fn negate(&mut self, node_id: NodeId) -> NodeId {
+        let node = match self.node(node_id) {
+            NodeNew::AlwaysTrue => return ALWAYS_FALSE,
+            NodeNew::AlwaysFalse => return ALWAYS_TRUE,
+            NodeNew::Interior(node) => node,
+        };
+
+        let key = node_id;
+        if let Some(cached) = self.negate_cache.get(&key) {
+            return *cached;
+        }
+
+        let if_true_id = self.negate(node.if_true_id);
+        let if_false_id = self.negate(node.if_false_id);
+        let result = self.new_node(
+            node.constraint_id,
+            if_true_id,
+            if_false_id,
+            node.source_order,
+        );
+
+        self.negate_cache.insert(key, result);
+        result
     }
 
     /// Returns the `or` or intersection of two BDDs.
