@@ -32,8 +32,8 @@ pub(crate) use self::cyclic::{PairVisitor, TypeTransformer};
 pub(crate) use self::diagnostic::register_lints;
 pub use self::diagnostic::{TypeCheckDiagnostics, UNDEFINED_REVEAL, UNRESOLVED_REFERENCE};
 pub(crate) use self::infer::{
-    TypeContext, infer_complete_scope_types, infer_deferred_types, infer_definition_types,
-    infer_expression_type, infer_expression_types, infer_scope_types,
+    TypeContext, function_known_decorators, infer_complete_scope_types, infer_deferred_types,
+    infer_definition_types, infer_expression_type, infer_expression_types, infer_scope_types,
 };
 pub use self::signatures::ParameterKind;
 pub(crate) use self::signatures::{CallableSignature, Signature};
@@ -6029,19 +6029,13 @@ impl<'db> Type<'db> {
                             return false;
                         };
 
-                        let DefinitionKind::Function(_) = binding_definition.kind(db) else {
+                        if !matches!(binding_definition.kind(db), DefinitionKind::Function(_)) {
                             return false;
-                        };
+                        }
 
-                        infer_definition_types(db, binding_definition)
-                            .declaration_type(binding_definition)
-                            .inner_type()
-                            .as_function_literal()
-                            .is_some_and(|function| {
-                                function.name(db).as_str() != "__new__"
-                                    && function
-                                        .has_known_decorator(db, FunctionDecorators::STATICMETHOD)
-                            })
+                        binding_definition.name(db).as_deref() != Some("__new__")
+                            && function_known_decorators(db, binding_definition)
+                                .contains(FunctionDecorators::STATICMETHOD)
                     });
                     if in_staticmethod {
                         return Err(InvalidTypeExpressionError {
