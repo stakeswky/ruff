@@ -710,6 +710,7 @@ impl<'a> SuppressionsBuilder<'a> {
             }
         }
 
+        let mut comment_only_line = true;
         let mut seen_nonlogical_newline = false;
         for next_token in after {
             match next_token.kind() {
@@ -718,12 +719,14 @@ impl<'a> SuppressionsBuilder<'a> {
                 }
                 TokenKind::Comment => {}
                 TokenKind::NonLogicalNewline if has_intermediary => {
-                    if seen_nonlogical_newline {
+                    if seen_nonlogical_newline && !comment_only_line {
                         break;
                     }
                     seen_nonlogical_newline = true;
+                    comment_only_line = true;
                 }
                 _ => {
+                    comment_only_line = false;
                     end = next_token.end();
                 }
             }
@@ -1858,6 +1861,55 @@ print('hello')
     }
 
     #[test]
+    fn ignore_suppression_standalone_stacked() {
+        let source = "
+# ruff:ignore[code]
+# intermediate comment
+# ruff:ignore[something]
+# another comment
+print('hello')
+print('goodbye')
+";
+        assert_debug_snapshot!(
+            Suppressions::debug(source),
+            @r##"
+        Suppressions {
+            valid: [
+                Suppression {
+                    covered_source: "# ruff:ignore[code]\n# intermediate comment\n# ruff:ignore[something]\n# another comment\nprint('hello')",
+                    code: "code",
+                    disable_comment: SuppressionComment {
+                        text: "# ruff:ignore[code]",
+                        action: Ignore,
+                        codes: [
+                            "code",
+                        ],
+                        reason: "",
+                    },
+                    enable_comment: None,
+                },
+                Suppression {
+                    covered_source: "# ruff:ignore[something]\n# another comment\nprint('hello')",
+                    code: "something",
+                    disable_comment: SuppressionComment {
+                        text: "# ruff:ignore[something]",
+                        action: Ignore,
+                        codes: [
+                            "something",
+                        ],
+                        reason: "",
+                    },
+                    enable_comment: None,
+                },
+            ],
+            invalid: [],
+            errors: [],
+        }
+        "##,
+        );
+    }
+
+    #[test]
     fn ignore_suppression_standalone_multiline_top() {
         let source = "
 # ruff:ignore[code]
@@ -1934,6 +1986,7 @@ print('hello')  # ruff:ignore[alpha]
 def foo(
     arg1,
     # ruff:ignore[gamma]
+    # stacked
     arg2,
 ):
     print(  # ruff:ignore[delta]
@@ -1963,7 +2016,7 @@ bar = [
                     enable_comment: None,
                 },
                 Suppression {
-                    covered_source: "# ruff:ignore[beta]\ndef foo(\n    arg1,\n    # ruff:ignore[gamma]\n    arg2,\n):",
+                    covered_source: "# ruff:ignore[beta]\ndef foo(\n    arg1,\n    # ruff:ignore[gamma]\n    # stacked\n    arg2,\n):",
                     code: "beta",
                     disable_comment: SuppressionComment {
                         text: "# ruff:ignore[beta]",
@@ -1976,7 +2029,7 @@ bar = [
                     enable_comment: None,
                 },
                 Suppression {
-                    covered_source: "# ruff:ignore[gamma]\n    arg2,",
+                    covered_source: "# ruff:ignore[gamma]\n    # stacked\n    arg2,",
                     code: "gamma",
                     disable_comment: SuppressionComment {
                         text: "# ruff:ignore[gamma]",
